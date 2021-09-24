@@ -6,6 +6,12 @@ This tool is used to detect if a system is using a mSATA SSD storage device that
 
 A batch of 8GB Protectli-brand mSATA SSDs has higher failure rates than we allow. This tool will identify if an affected SSD is attached to the system, and provide instructions on how to request an RMA with Protectli.
 
+## Prerequisites
+
+* A Linux distro
+* `whiptail` or `dialog` for TUI
+* `smartmontools` to read disk information
+
 ## Usage
 
 1. Boot into a Linux environment on a machine containing a potentially-affected mSATA. (It doesn't necessarily need to be attached by mSATA. For example, you can use a USB-to-mSATA tool.)
