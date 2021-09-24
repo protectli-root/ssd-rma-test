@@ -1,0 +1,131 @@
+#!/bin/bash
+
+#######################################################################
+#
+# rma-test.sh
+#
+# Version: 1.0
+# Author: ed.borgquist@protectli.com
+#
+# This script detects if a Protectli 8GB mSATA is prone to known
+# failure.
+#
+# Invoke as:
+# ./rma-test.sh
+#
+#######################################################################
+
+# Change me to adjust disk detection times.
+# Longer is better, but 0.1 is good.
+SLEEP=0.1 ;
+
+# Check dependencies
+WHIPTAIL='whiptail' ;
+[[ $( which $WHIPTAIL 2>/dev/null ) ]] || WHIPTAIL='dialog' ;
+[[ $( which $WHIPTAIL 2>/dev/null ) ]] || { echo 'No whiptail or dialog found. Please install whiptail for your distro.' && exit 1 ; } ;
+
+MKTEMP='mktemp' ;
+[[ $( which $MKTEMP 2>/dev/null ) ]] || MKTEMP='tempfile' ;
+[[ $( which $MKTEMP 2>/dev/null ) ]] || { echo 'No mktemp. Please install mktemp for your distro.' && exit 1 ; } ;
+
+[[ $( which smartctl 2>/dev/null ) ]] || { echo 'No smartctl found. Please install smartmontools for your distro.' && exit 1 ; } ;
+[[ $( which bc 2>/dev/null ) ]] || { echo 'No bc (math binary) found. Please install bc for your distro.' && exit 1 ; } ;
+
+$WHIPTAIL \
+	--title "Protectli mSATA Tester" \
+	--msgbox "This tool must be used on a machine that has a Protectli 8GB mSATA\nattached in some way. If you need to attach the drive, please do so\nnow before pressing OK to continue." \
+	10 78 ;
+
+while true ; do
+	{
+		for (( i = 0 ; i <= 100 ; i+=5 )) ; do
+			sleep $SLEEP ;
+			echo $i ;
+		done
+	} | $WHIPTAIL \
+		--title "Protectli mSATA Tester" \
+		--gauge "Waiting for disks to settle down..." \
+		6 50 0 ;
+
+	readarray -t DRIVES < <(lsblk -dnrI8 -oNAME | sort | uniq -u) ;
+
+	if (( 0 == ${#DRIVES[@]} )) ; then
+		if ( $WHIPTAIL \
+			--title "Protectli mSATA Tester" \
+			--yesno "No drive detected. Try again?" \
+			8 78 ) ; then
+			continue ;
+		else 
+			exit 0 ;
+		fi ;
+	fi ;
+
+	BAD_DRIVES=0 ;
+	for DRIVE in "${DRIVES[@]}" ; do 
+		FH=$( $MKTEMP ) ;
+		$( smartctl -a /dev/${DRIVES[$DRIVE]} > ${FH} ) ;
+		SMARTCTL_RET=$? ;
+
+		if (( ${SMARTCTL_RET} & 2 )) ; then
+			ROOT_METHOD='with sudo' ;
+			[[ $( which sudo 2>/dev/null ) ]] || ROOT_METHOD='as root' ;
+			$WHIPTAIL \
+				--title "Protectli mSATA Tester" \
+				--msgbox "Test result: INCOMPLETE\n\nThis script was unable to poll smartctl for devices.\nPlease try to run me again $ROOT_METHOD." \
+				14 78 ;
+				exit 2 ;
+		fi ;
+
+		$( grep -q '8.012.390.400' $FH 2>/dev/null ) ;
+		GREP_RES=$? ;
+
+		if (( "$GREP_RES" != "0" )) ; then
+			continue ;
+		fi ;
+		
+		VENDOR=$( grep 'Device Model:.*' $FH | awk '{print $3}' ) ;
+		FIRMWARE=$( grep 'Firmware Version:.*' $FH | awk '{print $3}' ) ;
+		SERIAL=$( grep 'Serial Number:.*' $FH | awk '{print $(NF)}' ) ;
+
+		ERRORS="" ;
+		(( ${SMARTCTL_RET} & 4 )) && ERRORS+="SMART Command Failed.\n" ;
+		(( ${SMARTCTL_RET} & 8 )) && ERRORS+="SMART returned DISK FAILING.\n" ;
+		(( ${SMARTCTL_RET} & 16 )) && ERRORS+="Prefail attributes are below thresholds!\n" ;
+		(( ${SMARTCTL_RET} & 32 )) && ERRORS+="Disk is OK, but prefail or usage is breaking thresholds.\n" ;
+		(( ${SMARTCTL_RET} & 64 )) && ERRORS+="Log contains records of disk failure.\n" ;
+		(( ${SMARTCTL_RET} & 128 )) && ERRORS+="Self-test has errors.\n" ;
+		rm ${FH} ;
+
+		
+		ERRORS_TEXT='';
+		if (( 0 != ${#ERRORS[@]} )) ; then
+			ERRORS_TEXT="The following errors were also detected. Immediate backup of your data is advised!\n\n${ERRORS}" ;
+		fi ;
+
+		if [ "SBFM01W3" = "$FIRMWARE" ] && [ "SATAFIRM" = "$VENDOR" ] ; then
+			BAD_DRIVES+=1 ;
+			$WHIPTAIL \
+				--title "Protectli mSATA Tester" \
+				--msgbox "Test result: Affected Device Found at ${DRIVES[$DRIVE]}! \n\nPlease open a ticket at protectli.com with the following info:\n - Device Serial: ${SERIAL}\n - Mask: ${SMARTCTL_RET}\n\n${ERRORS_TEXT}" \
+				18 78 ;
+		fi ;
+	done ;
+	
+	if (( "$BAD_DRIVES" > 0 )) ; then
+		$WHIPTAIL \
+			--title "Protectli mSATA Tester" \
+			--msgbox "Testing is complete. Press OK to exit." \
+			8 78 ;
+
+			exit 0 ;
+	else 
+		$WHIPTAIL \
+			--title "Protectli mSATA Tester" \
+			--msgbox "Test is complete.\n\n${#DRIVES[@]} drive(s) were scanned, and no problems were found.\n\nPress OK to exit." \
+			8 78 ;
+
+			exit 0 ;
+	fi ;
+done ;
+clear ;
+exit 0 ;
